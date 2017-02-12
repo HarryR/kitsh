@@ -1,0 +1,58 @@
+{% extends "_layout.html" %}
+
+{% block content %}
+    {% if tasks %}
+    <form id="join" class="form-horizontal">
+        <fieldset>
+            <legend>Join existing session</legend>
+
+            <div class="control-group">
+                <div class="controls">
+                    <ul>
+                      {% for task_id, task in tasks.items() %}
+                          <li><a href="/console?id={{task_id}}">{{ task }}</a></li>
+                      {% endfor %}
+                    </ul>
+                </div>
+            </div>
+        </fieldset>
+    </form>
+    {% endif %}
+
+    <form id="connect" class="form-horizontal" action="/console" method="POST">
+        <fieldset>                 
+
+            <legend>Create New Session</legend>
+
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">
+                    Create
+                </button>
+            </div>
+
+        </fieldset>
+    </form>
+{% endblock %}
+
+{% block script %}
+    <script type='application/javascript'>
+        $(document).ready(function() {
+            $('#ssh').hide();
+            $('#private_key_authentication', '#connect').hide();
+
+            $('input:radio[value=private_key]', '#connect').click(
+                function() {
+                    $('#password_authentication').hide();
+                    $('#private_key_authentication').show();
+                }
+            );
+
+            $('input:radio[value=password]', '#connect').click(
+                function() {
+                    $('#password_authentication').show();
+                    $('#private_key_authentication').hide();
+                }
+            );
+        });             
+    </script>
+{% endblock %}

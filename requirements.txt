@@ -1,0 +1,6 @@
+gevent
+gevent-websocket
+paramiko
+flask
+websocket-client
+setproctitle

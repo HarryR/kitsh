@@ -1,0 +1,2 @@
+recursive-include metadock/static *
+recursive-include metadock/templates *
