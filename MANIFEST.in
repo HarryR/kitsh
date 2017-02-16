@@ -1,2 +1,2 @@
-recursive-include metadock/static *
-recursive-include metadock/templates *
+recursive-include metash/static *
+recursive-include metash/templates *

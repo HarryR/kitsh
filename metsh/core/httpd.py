@@ -1,21 +1,19 @@
 #!/usr/bin/env python
 
-from gevent import monkey
-monkey.patch_all()
-
-import sys
 import logging
 from flask import Flask
+from . import Plugin
 
-from .plugin import Plugin, Host
+
+LOG = logging.getLogger(__name__)
 
 
-class HttpdPlugin(Plugin):
+class Httpd(Plugin):
     def __init__(self, blueprints):
-        self._log = logging.getLogger(__name__)
         self._blueprints = blueprints
         self._flask = None
         self._listen = None
+        self._server = None
 
     def options(self, parser, env):
         parser.add_argument('--port', '-p',
@@ -30,25 +28,27 @@ class HttpdPlugin(Plugin):
     def configure(self, options, conf):
         self._listen = (options.host, options.port)
 
-    def run(self):
+    def __repr__(self):
+        return "%s%r @ http://%s:%d" % (self.__class__.__name__,
+                            self._blueprints,
+                             self._listen[0], int(self._listen[1]))
+
+    def stop(self):
+        self._server.stop()
+
+    def run(self, task):
         from gevent.pywsgi import WSGIServer
         from geventwebsocket.handler import WebSocketHandler
-        self._log.info('running on %r:%r', self._listen[0], self._listen[1])
 
-        flask = Flask(__name__)
+        flask = Flask(__name__, static_folder=None)
         for blueprint in self._blueprints:
             flask.register_blueprint(blueprint)
 
-        http_server = WSGIServer(self._listen, flask,
-            log=self._log,
+        self._server = WSGIServer(self._listen, flask,
+            log=LOG,
             handler_class=WebSocketHandler)
         try:
-            http_server.serve_forever()
+            self._server.serve_forever()
         except KeyboardInterrupt:
-            pass
+            self.stop()
 
-
-if __name__ == "__main__":
-    from .frontend import FrontendBlueprint
-    server = HttpdPlugin([FrontendBlueprint()])
-    Host(server).main(sys.argv[1:])

@@ -4,8 +4,8 @@
         <meta charset="utf-8">
         <title>wssh</title>
 
-        <link href="{{url_for('static', filename='bootstrap.min.css')}}" rel="stylesheet" />
-        <link href="{{url_for('static', filename='style.css')}}" rel="stylesheet" />
+        <link href="{{url_for('webui.static', filename='bootstrap.min.css')}}" rel="stylesheet" />
+        <link href="{{url_for('webui.static', filename='style.css')}}" rel="stylesheet" />
     </head>
 
     <body>
@@ -25,11 +25,11 @@
         </div>
         {% endblock %}
 
-        <script type="application/javascript" src="{{url_for('static', filename='jquery.min.js')}}">
+        <script type="application/javascript" src="{{url_for('webui.static', filename='jquery.min.js')}}">
         </script>
-        <script type="application/javascript" src="{{url_for('static', filename='term.js')}}">
+        <script type="application/javascript" src="{{url_for('webui.static', filename='term.js')}}">
         </script>
-        <script type="application/javascript" src="{{url_for('static', filename='wssh.js')}}">
+        <script type="application/javascript" src="{{url_for('webui.static', filename='wssh.js')}}">
         </script>     
         {% endblock %}
 

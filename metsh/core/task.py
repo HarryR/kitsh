@@ -5,7 +5,7 @@ import os
 from base64 import b32encode
 import logging
 
-from .inou import Bridge
+from .inout import Channel
 
 import gevent
 from gevent.event import Event
@@ -15,32 +15,40 @@ LOG = logging.getLogger(__name__)
 
 
 def random_name():
-    return b32encode(os.urandom(10))
+    return b32encode(os.urandom(5))
+
+
+def make_callable(what, names):
+    if callable(what):
+        return what
+    for name in names:
+        method = getattr(what, name, None)
+        if method:
+            return method
+    raise ValueError("Unable to call %r" % (what,))
 
 
 class Task(object):
-    def __init__(self, function=None):
+    def __init__(self, obj, inch=None, outch=None):
+        assert obj is not None
+        self._obj = obj
         self.pid = random_name()
-        self.bridge = Bridge()
-        self._func = function
+        self.input = inch or Channel()
+        self.output = outch or Channel()
         self.stopped = Event()
         self.running = Event()
         self.error = Event()
 
-    def _run(self):
-        if self._func:            
-            if callable(self._func):
-                method = self._func
-            elif hasattr(self._func, 'run'):
-                method = self._func.run
-            method(self.bridge, self)
-        else:
-            raise NotImplementedError("")
+    def wait(self):
+        try:
+            self.stopped.wait()
+        except KeyboardInterrupt:
+            self.stop()
+            self.stopped.wait()
+        return self
 
-    def _target(self):
-        if not self._func:
-            return self
-        return self._func
+    def _run(self):
+        make_callable(self._obj, ['run'])(self)
 
     @property
     def state(self):
@@ -55,18 +63,16 @@ class Task(object):
         return 'NEW'
 
     def __repr__(self):
-        return "<Task:%s:%r>" % (self.pid, self._target())
+        return "%s:%s %r" % (self.__class__.__name__, self.pid, self._obj)
 
     def __str__(self):
-        return "%s [%s] %r" % (self.pid, self.state, self._target())
+        return "%s [%s] %r" % (self.pid, self.state, self._obj)
 
     def stop(self):
         if self.running.ready():
-            self.bridge.stop()
-            for name in ['close', 'stop']:
-                method = getattr(self._func, name, None)
-                if method:
-                    method()
+            self.input.close()
+            self.output.close()
+            make_callable(self._obj, ['stop', 'close'])()
 
 
 class TaskManager(object):

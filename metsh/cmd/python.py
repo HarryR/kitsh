@@ -23,34 +23,32 @@ class PythonConsole(code.InteractiveConsole, object):
             filename='<Python-' + str(self) + '>',
             locals=symtab)
 
-    def raw_input(self, prompt):
+    def raw_input(self, prompt=""):
+        newline = '\r'
         self.write(prompt)
-        empty = tuple()
-        while True:
-            msg = self.sock.recv()
-            if msg is StopIteration:
+        while True:            
+            data = self.sock.read()
+            if data is StopIteration:
                 break
-            if 'data' in msg:
-                data = msg['data']
-                if '\r' not in data:
-                    self._line += data
-                    self.sock.send(dict(data=data))
-                else:
-                    pos = data.index('\r') + 1
-                    before = data[:pos]
-                    after = data[pos:]
-                    self.sock.send(dict(data=before))
-                    self._line += before
-                    line = self._line[0:len(self._line)].rstrip("\r\n")
-                    self._line = after
-                    return line
+            if newline not in data:
+                self._line += data
+                self.sock.write(data)
+            else:
+                pos = data.index(newline) + 1
+                before = data[:pos]
+                after = data[pos:]
+                self.sock.write(before)
+                self._line += before
+                line = self._line[0:len(self._line)].rstrip("\r\n")
+                self._line = after
+                return line
         raise EOFError()
 
     def write(self, strdata):
-        self.sock.send(dict(data=strdata.replace("\n", "\r\n")))
+        self.sock.write(strdata.replace("\n", "\r\n"))
 
-    def run(self, bridge, task):
-        self.sock = bridge.server_sock()
+    def run(self, bridge):
+        self.sock = bridge.stdin()
         try:
             try:
                 self.interact()

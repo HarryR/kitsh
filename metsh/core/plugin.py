@@ -5,7 +5,9 @@ import os
 import sys
 from fcntl import flock, LOCK_EX, LOCK_UN, LOCK_NB
 
-__all__ = ('Plugin', 'Host', 'Loader')
+from .task import TaskManager
+
+__all__ = ('Plugin', 'PluginHost', 'PluginLoader')
 
 
 class ArgumentParser(argparse.ArgumentParser):
@@ -93,7 +95,7 @@ def _modname(cls, full=False):
     """
     Full module name, avoids using '__main__' unless necessary
     """
-    module = cls.__module__
+    module = getattr(cls, '__module__', None)
     if module is None or module == str.__class__.__module__:
         return cls.__name__
     if full and module == "__main__":
@@ -121,7 +123,7 @@ def _fullname(obj):
     return _modname(obj, True)
 
 
-class Host(Plugin):
+class PluginHost(Plugin):
     """
     Utility class that provides a standard way of
     hosting services as system process.
@@ -130,11 +132,15 @@ class Host(Plugin):
       * Logging configuration
       * Pid file management
     """
-    __slots__ = ('_plugin', '_options', '_pidfile', '_log')
+    __slots__ = ('_plugin', '_options', '_pidfile', '_log', '_args')
 
-    def __init__(self, plugin_obj):
+    def __init__(self, plugin_obj, args=None):
         assert plugin_obj is not None
         assert not isinstance(plugin_obj, self.__class__)
+        if args is None:
+            args = sys.argv[1:]
+            assert len(args) >= 0
+        self._args = args
         self._log = logging.getLogger()
         self._pidfile = None
         self._plugin = plugin_obj
@@ -215,33 +221,32 @@ class Host(Plugin):
             pidfile.flush()
             self._pidfile = pidfile
 
-    def run(self):
-        return self._plugin.run()
+    def stop(self):
+        stopfn = getattr(self._plugin, 'stop', None)
+        if stopfn:
+            stopfn()
 
-    def main(self, args=None):
+    def start(self):
         """
         Construct and run the daemon, usually from __main__
 
         This is the preferred way of running plugins.
         """
-        if args is None:
-            args = sys.argv[1:]
-        assert len(args) >= 0
         plugin_name = _fullname(self._plugin)
         parser = ArgumentParser(prog=plugin_name)
         self.options(parser, {})
-        retval = None
+        task = None
         try:
-            options = parser.parse_args(args)
+            options = parser.parse_args(self._args)
             try:
                 self.configure(options, {})
-                retval = self.run()
+                task = TaskManager.start(self._plugin)
             except Exception:
                 self._log.exception("Failed to run!")
         except SystemExit:
             pass
         self._delpid()
-        return retval
+        return task
 
 
 class WaitForever(Plugin):
@@ -257,7 +262,7 @@ class WaitForever(Plugin):
             pass
 
 
-class Loader(Plugin):
+class PluginLoader(Plugin):
     """
     Loads a dotted class name and runs with arguments
     """
@@ -290,7 +295,7 @@ class Loader(Plugin):
         self._args = options.args
 
     def run(self):
-        return Host(self._plugin).main(self._args)
+        return PluginHost(self._plugin).main(self._args)
 
 if __name__ == "__main__":
-    Host(Loader()).main(sys.argv[1:])
+    PluginHost(PluginLoader()).main(sys.argv[1:])

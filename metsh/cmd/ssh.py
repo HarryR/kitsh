@@ -75,7 +75,7 @@ class SSHTask(object):
     def _read(self, data):
         return dict(data=data)
 
-    def run(self, bridge, task):
+    def run(self, bridge):
         if self._command:
             session = self._ssh.get_transport().open_session()
             session.get_pty(self._term)

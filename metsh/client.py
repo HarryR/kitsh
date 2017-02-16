@@ -100,8 +100,6 @@ def main():
         help='MetaDock server port (default: 5000)',
         type=int,
         default=5000)
-    parser.add_argument('name',
-        help='e.g. DWOK7PML7ZTZSSBL')
 
     args = parser.parse_args()
     endpoint = 'ws://{host}:{port}/websocket'.format(**vars(args))

@@ -4,4 +4,4 @@ COPY . /app/
 
 WORKDIR /app
 
-ENTRYPOINT ["/usr/bin/python", "-mmetadock.httpd"]
+ENTRYPOINT ["/usr/bin/python", "-mmetash"]
