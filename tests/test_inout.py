@@ -1,4 +1,4 @@
-from metsh.core import Channel
+from kitsh.core.inout import Channel
 
 
 def test_sock():

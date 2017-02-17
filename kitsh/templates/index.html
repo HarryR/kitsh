@@ -1,9 +1,8 @@
 {% extends "_layout.html" %}
 
 {% block content %}
-    {% if tasks %}
-    <form id="join" class="form-horizontal">
-        <fieldset>
+    <fieldset>
+        {% if tasks %}
             <legend>Join existing session</legend>
 
             <div class="control-group">
@@ -15,23 +14,17 @@
                     </ul>
                 </div>
             </div>
-        </fieldset>
-    </form>
-    {% endif %}
-
-    <form id="connect" class="form-horizontal" action="/console" method="POST">
-        <fieldset>                 
-
-            <legend>Create New Session</legend>
-
+            <br />
+        {% endif %}
+        <form id="connect" class="form-horizontal" action="/" method="POST">
             <div class="form-actions">
                 <button type="submit" class="btn btn-primary">
-                    Create
+                    Create New Session
                 </button>
             </div>
+        </form>
+    </fieldset>
 
-        </fieldset>
-    </form>
 {% endblock %}
 
 {% block script %}

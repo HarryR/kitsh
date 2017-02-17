@@ -1,2 +1,2 @@
-recursive-include metash/static *
-recursive-include metash/templates *
+recursive-include kitsh/static *
+recursive-include kitsh/templates *

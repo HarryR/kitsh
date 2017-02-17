@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
-
+__all__ = ('Task', 'TaskManager')
 
 import os
-from base64 import b32encode
 import logging
-
-from .inout import Channel
+from base64 import b32encode
 
 import gevent
 from gevent.event import Event
+
+from .inout import Channel
 
 
 LOG = logging.getLogger(__name__)
@@ -26,6 +26,26 @@ def make_callable(what, names):
         if method:
             return method
     raise ValueError("Unable to call %r" % (what,))
+
+
+
+class _TaskIOBridge(object):
+    def __init__(self, intask, outtask):
+        self._in2out = intask.input.monitor(outtask.input.send)
+        self._intask = outtask.output.monitor(intask.output.send)
+        self._closed = Event()
+
+    @property
+    def closed(self):
+        return self._closed.ready()
+
+    def wait(self):
+        if not self.closed:
+            return self._closed.wait()
+
+    def close(self):
+        if not self.closed:
+            self._closed.set()
 
 
 class Task(object):
@@ -49,6 +69,10 @@ class Task(object):
 
     def _run(self):
         make_callable(self._obj, ['run'])(self)
+
+    def bridge(self, othertask):
+        assert isinstance(othertask, Task)
+        return _TaskIOBridge(self, othertask)
 
     @property
     def state(self):

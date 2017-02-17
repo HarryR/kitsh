@@ -1,6 +1,6 @@
 import argparse
 import sys
-
+import socket
 import signal
 import errno
 
@@ -42,7 +42,12 @@ def _resize(ws):
 
 
 def invoke_shell(endpoint):
-    ssh = websocket.create_connection(endpoint)
+    try:
+        ssh = websocket.create_connection(endpoint)
+    except socket.error as ex:
+        print >>sys.stderr, "error connecting to %s" % (endpoint,)
+        print >>sys.stderr, " - " + str(ex)
+        return
     _resize(ssh)
     oldtty = termios.tcgetattr(sys.stdin)
     old_handler = signal.getsignal(signal.SIGWINCH)

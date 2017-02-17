@@ -7,7 +7,7 @@ import gevent
 from gevent.queue import Queue
 from gevent.event import Event
 
-__all__ = ('Channel',)
+__all__ = ('Channel', 'Monitor', 'DataStreamChannel')
 
 
 LOG = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ class Monitor(object):
     def __call__(self, msg):
         try:
             if self._replyfn:
-                self.replyfn(msg)
+                self._replyfn(msg)
         finally:
             self._queue.put_nowait(msg)
 
@@ -42,10 +42,10 @@ class Monitor(object):
         return self
 
     def __del__(self):
-        self.detach()
+        self.close()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.detach()
+        self.close()
 
     def __iter__(self):
         while not self._sock.closed:
@@ -54,7 +54,7 @@ class Monitor(object):
                 break
             yield msg
 
-    def detach(self):
+    def close(self):
         if not self.closed:
             self._sock._mon.discard(self)
             self._queue.put(StopIteration)
@@ -80,12 +80,18 @@ class Channel(object):
         for msg in self.monitor():
             yield msg
 
-    def __call__(self, *msg_list):
-        self.send(*msg_list)
+    def __call__(self, *msg_list, **msg_kwa):
+        return self.send(*msg_list, **msg_kwa)
 
-    def send(self, *msg_list):
+    def send(self, *msg_list, **msg_kwa):
+        sent = 0
         for msg in msg_list:
             self._recvq.put_nowait(msg)
+            sent += 1
+        if msg_kwa:
+            self._recvq.put_nowait(msg_kwa)
+            sent += 1
+        return sent
 
     def monitor(self, replyfn=None):
         return Monitor(self, replyfn=replyfn)
@@ -155,7 +161,7 @@ class DataStreamChannel(object):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self._mon.detach()
+        self._mon.close()
 
     def write(self, data):
         self._sock.send(dict(data=data))
@@ -173,3 +179,4 @@ class DataStreamChannel(object):
                 self._buf = self._buf[maxbytes:]
                 return retval
         raise StopIteration
+

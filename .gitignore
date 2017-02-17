@@ -1,5 +1,9 @@
 *.pyc
 *.swp
+_*.md
+build/
+dist/
+*.egg-info/
 __pycache__
 /.cache/
 /.coverage

@@ -2,7 +2,7 @@
 
 import logging
 from flask import Flask
-from . import Plugin
+from .plugin import Plugin
 
 
 LOG = logging.getLogger(__name__)

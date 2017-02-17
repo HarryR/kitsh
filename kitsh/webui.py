@@ -4,8 +4,11 @@ import logging
 from flask import Blueprint, request, render_template, redirect
 from werkzeug.exceptions import BadRequest
 
-from .core import TaskManager, PluginHost, Httpd
-from .cmd.websocket import Websocket
+from .core.task import TaskManager
+from .core.plugin import PluginHost
+from .core.httpd import Httpd
+from .core.process import Process
+from .core.websocket import Websocket
 
 
 class WebUI(Blueprint):
@@ -13,12 +16,9 @@ class WebUI(Blueprint):
         return "WebUI"
 
     def __init__(self, *args, **kwargs):
-        
         root_path = os.path.dirname(__file__)
         template_folder = os.path.join(root_path, 'templates')
         static_folder = os.path.join(root_path, 'static')
-        print("TEMPLATES", template_folder)
-        print("STATIC", static_folder)
         
         super(WebUI, self).__init__(
             'webui', __name__,
@@ -27,11 +27,11 @@ class WebUI(Blueprint):
         self._log = logging.getLogger(__name__)
 
         @self.route('/')
-        def index():
+        def GET():
             return render_template('index.html', tasks=TaskManager.tasks)
 
-        @self.route('/console', methods=['GET'])
-        def console():
+        @self.route('/', methods=['POST'])
+        def POST():
             task = request.args.get('id')        
             if task:
                 task = TaskManager.get(task)
@@ -49,7 +49,8 @@ class WebUI(Blueprint):
             remote_addr = "%s:%s" % (request.remote_addr,
                                      request.environ.get('REMOTE_PORT'))
             task = TaskManager.start(Websocket(websocket, remote=remote_addr))
-            task.wait()
+            subtask = TaskManager.start(Process(["ps", "-aux"]))
+            task.bridge(subtask).wait()
             return str()
 
 """
@@ -87,7 +88,5 @@ class WebUI(Blueprint):
             return redirect('/watch/' + task.pid)
 """
 
-if __name__ == "__main__":
-    import sys
-    HOST = PluginHost(Httpd([WebUI()]), sys.argv[1:])
-    HOST.start().wait().stop()
+if __name__ == "__main__":    
+    PluginHost.main(Httpd([WebUI()]))

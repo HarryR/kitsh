@@ -1,4 +1,5 @@
 from __future__ import print_function
+
 import logging
 import json
 
@@ -17,7 +18,7 @@ class Websocket(object):
         self._tasks = None
 
     def __repr__(self):
-        return "%s@%s" % (self.__class__.__name__, self._remote or "%x" % (id(self),))
+        return "%s @ %s" % (self.__class__.__name__, self._remote or "%x" % (id(self),))
 
     def run(self, task):
         assert self._tasks is None
@@ -50,6 +51,7 @@ class Websocket(object):
             if data in (StopIteration, None):
                 break
             try:
+                print("Recvd", data)
                 task.output.send(json.loads(data))
             except Exception:
                 LOG.exception("%r recv error for %r", self, data)
@@ -59,7 +61,7 @@ class Websocket(object):
 
     def _sendloop(self, task):
         for msg in task.output.monitor():
-            if msg is StopIteration:
+            if msg is StopIteration or self.closed:
                 break
             task.input.send(msg)
             try:

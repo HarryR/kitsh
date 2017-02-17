@@ -66,12 +66,6 @@ class Plugin(object):
         """
         pass
 
-    def run(self):
-        """
-        Invoke whichever action the plugin needs to perform.
-        """
-        pass
-
 
 def str_to_class(module_name, class_name):
     """
@@ -226,6 +220,13 @@ class PluginHost(Plugin):
         if stopfn:
             stopfn()
 
+    @classmethod
+    def main(cls, plugin, args=None):
+        if not args:
+            args = sys.argv[1:]
+        host = cls(plugin, args)
+        return host.start().wait().stop()
+
     def start(self):
         """
         Construct and run the daemon, usually from __main__
@@ -247,19 +248,6 @@ class PluginHost(Plugin):
             pass
         self._delpid()
         return task
-
-
-class WaitForever(Plugin):
-    """
-    Sleeps until interrupted
-    """
-    def run(self):
-        import time
-        try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            pass
 
 
 class PluginLoader(Plugin):
@@ -294,8 +282,8 @@ class PluginLoader(Plugin):
         self._plugin = cls()
         self._args = options.args
 
-    def run(self):
-        return PluginHost(self._plugin).main(self._args)
+    def run(self, task=None):
+        return PluginHost.main(self._plugin, self._args)
 
 if __name__ == "__main__":
-    PluginHost(PluginLoader()).main(sys.argv[1:])
+    PluginHost.main(PluginLoader())
