@@ -2,6 +2,8 @@
 
 import logging
 from flask import Flask
+from gevent.pywsgi import WSGIServer
+from geventwebsocket.handler import WebSocketHandler
 from .plugin import Plugin
 
 
@@ -29,17 +31,15 @@ class Httpd(Plugin):
         self._listen = (options.host, options.port)
 
     def __repr__(self):
-        return "%s%r @ http://%s:%d" % (self.__class__.__name__,
-                            self._blueprints,
-                             self._listen[0], int(self._listen[1]))
+        return "%s%r @ http://%s:%d" % (
+            self.__class__.__name__, self._blueprints,
+            self._listen[0], int(self._listen[1]))
 
     def stop(self):
-        self._server.stop()
+        if self._server:
+            self._server.stop()
 
-    def run(self, task):
-        from gevent.pywsgi import WSGIServer
-        from geventwebsocket.handler import WebSocketHandler
-
+    def run(self, task=None):
         flask = Flask(__name__, static_folder=None)
         for blueprint in self._blueprints:
             flask.register_blueprint(blueprint)
@@ -51,4 +51,3 @@ class Httpd(Plugin):
             self._server.serve_forever()
         except KeyboardInterrupt:
             self.stop()
-

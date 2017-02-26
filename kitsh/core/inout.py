@@ -1,42 +1,34 @@
 from __future__ import print_function
 
 import logging
-from sets import Set
 
-import gevent
 from gevent.queue import Queue
 from gevent.event import Event
 
-__all__ = ('Channel', 'Monitor', 'DataStreamChannel')
+__all__ = ('Channel', 'Subscriber', 'Publisher', 'DataStream')
 
 
 LOG = logging.getLogger(__name__)
 
 
-class Monitor(object):
-    __slots__ = ('_sock', '_queue', 'closed', '_closed', '_replyfn')
+class Subscriber(object):
+    __slots__ = ('_pub', '_queue', '_closed', '_replyfn')
 
-    def __init__(self, sock, replyfn=None):
+    def __init__(self, pub, replyfn=None):
+        assert isinstance(pub, Publisher)
         assert replyfn is None or callable(replyfn)
-        self._sock = sock
+        self._pub = pub
         self._replyfn = replyfn
         self._queue = Queue()
         self._closed = Event()
-        self._sock._mon.add(self)
+        pub.attach(self)
 
     def __len__(self):
-        return self._queue.qsize()
-
-    @property
-    def closed(self):
-        return self._closed.ready()
+        if self._queue:
+            return self._queue.qsize()
 
     def __call__(self, msg):
-        try:
-            if self._replyfn:
-                self._replyfn(msg)
-        finally:
-            self._queue.put_nowait(msg)
+        return self.send(msg)
 
     def __enter__(self):
         return self
@@ -48,71 +40,131 @@ class Monitor(object):
         self.close()
 
     def __iter__(self):
-        while not self._sock.closed:
+        if not self.closed:
+            while self._queue is not None:
+                msg = self.recv()
+                if msg is None:
+                    break
+                yield msg
+
+    def recv(self):
+        if self._queue:
             msg = self._queue.get()
+            if msg is StopIteration:
+                self._queue = None
+                self.close()
+                return None
+            if self._replyfn:
+                self._replyfn(msg)
+            return msg
+
+    def send(self, msg):
+        if self.closed:
+            # XXX: raise better exception
+            raise RuntimeError("Closed")
+        if msg is StopIteration:
+            return self.close()
+        self._queue.put_nowait(msg)
+
+    @property
+    def closed(self):
+        return self._closed.ready() and self._queue is None
+
+    def close(self):
+        if self._queue is not None:
+            self._queue.put(StopIteration)
+        if not self.closed:
+            self._pub.detach(self)
+            self._closed.set()
+
+    def datastream(self):
+        return DataStream(self)
+
+
+class Publisher(object):
+    __slots__ = ('_subs',)
+
+    def __init__(self):
+        self._subs = set()
+
+    def __len__(self):
+        return len(self._subs)
+
+    def __del__(self):
+        self.close()
+
+    def subscribe(self, replyfn=None):
+        return Subscriber(self, replyfn)
+
+    def attach(self, receiverfn):
+        self._subs.add(receiverfn)
+
+    def detach(self, receiverfn):
+        self._subs.discard(receiverfn)
+
+    def send(self, msg):
+        for receiverfn in self._subs.copy():
+            receiverfn(msg)
+
+    def close(self):
+        self.send(StopIteration)
+
+
+class Channel(object):
+    __slots__ = ('_recvq', '_closed', '_mon')
+
+    def __init__(self):
+        self._mon = Publisher()
+        self._recvq = Queue()
+        self._closed = Event()
+
+    def __iter__(self):
+        while not self.closed:
+            msg = self.recv()
             if msg is StopIteration:
                 break
             yield msg
 
-    def close(self):
-        if not self.closed:
-            self._sock._mon.discard(self)
-            self._queue.put(StopIteration)
-            self._closed.set()
-
-
-class Channel(object):
-    __slots__ = ('_recvq', '_closed', '_mon', '_task')
-
-    def __init__(self):
-        self._mon = Set()
-        self._recvq = Queue()
-        self._closed = Event()
-        self._task = gevent.spawn(self._recvloop)
-
     def __len__(self):
+        """
+        Number of messages in buffer which haven't been delivered to watchers
+        """
         return self._recvq.qsize()
 
-    def __repr__(self):
-        return "<%s:%x>" % (self.__class__, id(self))
+    def __del__(self):
+        self.close()
 
-    def __iter__(self):
-        for msg in self.monitor():
-            yield msg
+    def send(self, msg):
+        self._recvq.put_nowait(msg)
+        if len(self._mon):
+            self.recv()
 
-    def __call__(self, *msg_list, **msg_kwa):
-        return self.send(*msg_list, **msg_kwa)
+    def watch(self, replyfn=None):
+        was_first = len(self._mon) == 0
+        subscriber = self._mon.subscribe(replyfn)
+        if was_first:
+            self._recvall()
+        return subscriber
 
-    def send(self, *msg_list, **msg_kwa):
-        sent = 0
-        for msg in msg_list:
-            self._recvq.put_nowait(msg)
-            sent += 1
-        if msg_kwa:
-            self._recvq.put_nowait(msg_kwa)
-            sent += 1
-        return sent
+    def _recvall(self):
+        while self._recvq.qsize():
+            self.recv()
 
-    def monitor(self, replyfn=None):
-        return Monitor(self, replyfn=replyfn)
+    def write(self, data):
+        self.send(dict(data=data))
 
     def recv(self):
-        """
-        Receive the next message in sequence for this queue.
-        Block until message is ready.
-        If multiple threads call .recv() each message will only be delivered
-        to one thread.
-        """
+        if self.closed:
+            # XXX: raise better exception
+            raise RuntimeError("Closed")
         msg = self._recvq.get()
-        for monitorfn in self._mon:
-            monitorfn(msg)
-        if msg is not StopIteration:
-            return msg
+        self._mon.send(msg)
+        if msg is StopIteration:
+            self._closed.set()
+        return msg
 
-    def _recvloop(self):
-        while not self.closed:
-            self.recv()
-        self._closed.set()
+    def wait(self):
+        return self._closed.wait()
 
     @property
     def closed(self):
@@ -120,19 +172,18 @@ class Channel(object):
 
     def close(self):
         if not self.closed:
-            self._recvq.put_nowait(StopIteration)
+            self.send(StopIteration)
 
     def datastream(self):
-        return DataStreamChannel(self)
+        return DataStream(self)
 
 
-class DataStreamChannel(object):
-    __slots__ = ('_buf', '_sock', '_mon')
+class DataStream(object):
+    __slots__ = ('_buf', '_sock')
 
     def __init__(self, sock):
         self._buf = ''
         self._sock = sock
-        self._mon = sock.monitor()
 
     def __len__(self):
         return len(self._buf)
@@ -144,7 +195,7 @@ class DataStreamChannel(object):
             self._buf = self._buf[pos:]
             return line.rstrip(newline)
 
-        for data in self.__iter__():
+        for data in self:
             if newline in data:
                 pos = data.index(newline) + 1
                 line = self._buf + data[:pos]
@@ -161,13 +212,19 @@ class DataStreamChannel(object):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self._mon.close()
+        self.close()
+
+    def __del__(self):
+        self.close()
+
+    def close(self):
+        self._sock = None
 
     def write(self, data):
         self._sock.send(dict(data=data))
 
     def read(self, maxbytes=None):
-        for msg in self._mon:
+        for msg in self._sock:
             if 'data' not in msg:
                 continue
             data = msg['data']
@@ -179,4 +236,3 @@ class DataStreamChannel(object):
                 self._buf = self._buf[maxbytes:]
                 return retval
         raise StopIteration
-

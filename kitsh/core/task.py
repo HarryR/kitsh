@@ -1,21 +1,16 @@
 # -*- coding: utf-8 -*-
 __all__ = ('Task', 'TaskManager')
 
-import os
+import sys
 import logging
-from base64 import b32encode
 
-import gevent
 from gevent.event import Event
+from gevent.greenlet import Greenlet
 
 from .inout import Channel
 
 
 LOG = logging.getLogger(__name__)
-
-
-def random_name():
-    return b32encode(os.urandom(5))
 
 
 def make_callable(what, names):
@@ -25,15 +20,65 @@ def make_callable(what, names):
         method = getattr(what, name, None)
         if method:
             return method
-    raise ValueError("Unable to call %r" % (what,))
 
+
+class _GreenletStdio(Greenlet):
+    """
+    A greenlet that replaces sys.std[in/out/err] while running.
+    Borrowed from: https://github.com/gevent/gevent/blob/master/src/gevent/backdoor.py
+
+    Based on gevent.backdoor, Copyright (c) 2009-2014, gevent contributors
+    Based on eventlet.backdoor, Copyright (c) 2005-2006, Bob Ippolito
+
+    https://raw.githubusercontent.com/gevent/gevent/master/LICENSE (MIT atow)
+    """
+    _fileobj = None
+    saved = None
+
+    def switch(self, *args, **kw):
+        if self._fileobj is not None:
+            self.switch_in()
+        Greenlet.switch(self, *args, **kw)
+
+    def switch_in(self, fileobj=None):
+        self.saved = sys.stdin, sys.stderr, sys.stdout
+        if fileobj:
+            self._fileobj = fileobj
+        if self._fileobj:
+            sys.stdin, sys.stdout, sys.stderr = self._fileobj
+
+    def switch_out(self):
+        if self.saved:
+            sys.stdin, sys.stderr, sys.stdout = self.saved
+        self.saved = None
+
+    def throw(self, *args, **kwargs):
+        if self.saved is None and self._fileobj is not None:
+            self.switch_in()
+        Greenlet.throw(self, *args, **kwargs)
+
+    def run(self):
+        try:
+            return Greenlet.run(self)
+        finally:
+            # Make sure to restore the originals.
+            self.switch_out()
 
 
 class _TaskIOBridge(object):
     def __init__(self, intask, outtask):
-        self._in2out = intask.input.monitor(outtask.input.send)
-        self._intask = outtask.output.monitor(intask.output.send)
+        self._in2out = intask.output.watch(outtask.input.send)
+        self._out2in = outtask.output.watch(intask.input.send)
         self._closed = Event()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def __del__(self):
+        self.close()
 
     @property
     def closed(self):
@@ -45,99 +90,140 @@ class _TaskIOBridge(object):
 
     def close(self):
         if not self.closed:
+            self._in2out.close()
+            self._out2in.close()
             self._closed.set()
 
 
 class Task(object):
-    def __init__(self, obj, inch=None, outch=None):
-        assert obj is not None
-        self._obj = obj
-        self.pid = random_name()
-        self.input = inch or Channel()
-        self.output = outch or Channel()
-        self.stopped = Event()
-        self.running = Event()
-        self.error = Event()
+    def __init__(self, run):
+        assert run is not None
+        self.input = Channel()
+        self.output = Channel()
+        self._obj = run
+        self._greenlet = None
+        TaskManager.register(self)
 
-    def wait(self):
-        try:
-            self.stopped.wait()
-        except KeyboardInterrupt:
-            self.stop()
-            self.stopped.wait()
-        return self
+    def __nonzero__(self):
+        if self._greenlet is None:
+            return False
+        return bool(self._greenlet)
+
+    def __bool__(self):
+        return self.__nonzero__()
+
+    def wait(self, timeout=None):
+        # XXX: before it's started, there is no _greenlet...
+        self._greenlet.join(timeout=timeout)
+
+    def start(self):
+        if self.state == 'NEW':
+            self._greenlet = _GreenletStdio(self._run)
+            self._greenlet.start()
+            return
+        raise RuntimeError('Cannot start, invalid state: ' + self.state)
 
     def _run(self):
-        make_callable(self._obj, ['run'])(self)
+        method = make_callable(self._obj, ['run'])
+        if not method:
+            raise ValueError("Unable to run: %r" % (self._obj,))
+
+        if self._greenlet:
+            # Redirect stdio of Greenlet to Tasks channels...
+            self._greenlet.switch_in((self.input, self.output, self.output))
+
+        LOG.info("RUNNING %r", self)
+        try:
+            method(self)
+            LOG.info("STOPPED %r", self)
+        except Exception as ex:
+            LOG.exception("ERROR %r", self)
+            raise ex
+        finally:
+            TaskManager.unregister(self)
 
     def bridge(self, othertask):
+        """
+        Sends the output of this task to the input of the other task
+        And the output of the other task to the input of this task
+        """
         assert isinstance(othertask, Task)
         return _TaskIOBridge(self, othertask)
 
     @property
+    def error(self):
+        if self._greenlet:
+            return self._greenlet.exception
+
+    @property
     def state(self):
-        states = (
-            (self.stopped, 'STOPPED'),
-            (self.running, 'RUNNING'),
-            (self.error, 'ERROR')
-        )
-        for event, name in states:
-            if event.ready():
-                return name
-        return 'NEW'
+        if self._greenlet is None:
+            return 'NEW'
+        if bool(self._greenlet):
+            return 'RUNNING'
+        if not self._greenlet.successful():
+            return 'ERROR'
+        return 'STOPPED'
 
     def __repr__(self):
-        return "%s:%s %r" % (self.__class__.__name__, self.pid, self._obj)
+        return "%s:%x %r" % (self.__class__.__name__, id(self), self._obj)
 
     def __str__(self):
-        return "%s [%s] %r" % (self.pid, self.state, self._obj)
+        return "%x [%s] %r" % (id(self), self.state, self._obj)
 
     def stop(self):
-        if self.running.ready():
+        if self.state == 'RUNNING':
             self.input.close()
             self.output.close()
-            make_callable(self._obj, ['stop', 'close'])()
+            stop_fn = make_callable(self._obj, ['stop', 'close'])
+            if stop_fn:
+                stop_fn()
 
 
 class TaskManager(object):
-    tasks = dict()
+    _tasks = dict()
 
     @classmethod
-    def _run(cls, task):        
-        try:
-            task.running.set()
-            LOG.info("RUNNING %r", task)
-            task._run()
-            LOG.info("STOPPED %r", task)
-            task.stopped.set()
-        except Exception:
-            task.stopped.set()
-            LOG.exception("EXCEPTION %r", task)            
-            task.error.set()
-        finally:
-            task.stop()
-        del cls.tasks[task.pid]
+    def count(cls):
+        return len(cls._tasks)
 
     @classmethod
-    def start(cls, task):
-        if not isinstance(task, Task):
-            task = Task(task)
-        if task.pid not in cls.tasks:
-            cls.tasks[task.pid] = task
-        if task.state == 'NEW':
-            gevent.spawn(cls._run, task)
+    def tasks(cls):
+        return cls._tasks
+
+    @classmethod
+    def spawn(cls, obj):
+        task = Task(obj)
+        task.start()
         return task
 
     @classmethod
+    def register(cls, task):
+        assert isinstance(task, Task)
+        if id(task) not in cls._tasks:
+            cls._tasks[id(task)] = task
+
+    @classmethod
+    def unregister(cls, task):
+        assert isinstance(task, Task)
+        if id(task) in cls._tasks:
+            del cls._tasks[id(task)]
+
+    @classmethod
     def get(cls, name):
-        return cls.tasks.get(name, None)        
+        return cls._tasks.get(name, None)
 
     @classmethod
     def list(cls):
-        return cls.tasks.keys()
+        return cls._tasks.keys()
 
     @classmethod
     def stop(cls, name):
-        task = cls.tasks.get(name)
+        task = cls._tasks.get(name)
         if task:
-            task.close()
+            task.stop()
+
+    @classmethod
+    def stopall(cls):
+        for task in cls._tasks.itervalues():
+            task.stop()

@@ -241,7 +241,7 @@ class PluginHost(Plugin):
             options = parser.parse_args(self._args)
             try:
                 self.configure(options, {})
-                task = TaskManager.start(self._plugin)
+                task = TaskManager.spawn(self._plugin)
             except Exception:
                 self._log.exception("Failed to run!")
         except SystemExit:
@@ -282,7 +282,7 @@ class PluginLoader(Plugin):
         self._plugin = cls()
         self._args = options.args
 
-    def run(self, task=None):
+    def run(self):
         return PluginHost.main(self._plugin, self._args)
 
 if __name__ == "__main__":

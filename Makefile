@@ -1,5 +1,8 @@
 PYTHON ?= python
 NAME ?= kitsh
+WWW_BROWSER = x-www-browser
+COVERAGE ?= $(PYTHON) -mcoverage
+COVERAGE_RUN ?= PYTHONPATH=. $(COVERAGE) run -a
 
 all: coverage
 
@@ -13,7 +16,7 @@ client:
 	$(PYTHON) -m$(NAME).client
 
 clean:
-	rm -rf coverage
+	rm -rf coverage build dist $(NAME).egg-info
 	find . -name '*.pyc' -exec rm -f '{}' ';'
 	find . -name '__pycache__' -type d -exec rm -rf '{}' ';' || true
 
@@ -23,11 +26,17 @@ test: lint
 coverage: lint
 	$(PYTHON) -mpytest --cov-report html:coverage --cov=$(NAME) tests/
 
-view-coverage: coverage
-	x-www-browser coverage/index.html
+coverage-html:
+	$(COVERAGE) html
+
+coverage-view:
+	$(WWW_BROWSER) coverage/index.html
 
 webui:
 	$(PYTHON) -m$(NAME).webui -v
+
+webui-coverage:
+	PYTHONPATH=. $(COVERAGE_RUN) -m kitsh.webui
 
 docker-build:
 	docker build -t $(NAME)/$(NAME) .

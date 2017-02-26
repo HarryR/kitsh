@@ -52,7 +52,7 @@ class Websocket(object):
                 break
             try:
                 print("Recvd", data)
-                task.output.send(json.loads(data))
+                task.input.send(json.loads(data))
             except Exception:
                 LOG.exception("%r recv error for %r", self, data)
                 continue
@@ -60,7 +60,8 @@ class Websocket(object):
         self.stop()
 
     def _sendloop(self, task):
-        for msg in task.output.monitor():
+        for msg in task.output.watch():
+            print("Got msg", msg)
             if msg is StopIteration or self.closed:
                 break
             task.input.send(msg)
