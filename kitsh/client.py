@@ -57,7 +57,7 @@ def invoke_shell(endpoint):
     signal.signal(signal.SIGWINCH, on_term_resize)
 
     try:
-        tty.setraw(sys.stdin.fileno())
+        #tty.setraw(sys.stdin.fileno())
         tty.setcbreak(sys.stdin.fileno())
 
         rows, cols = _pty_size()

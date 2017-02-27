@@ -4,6 +4,7 @@ __all__ = ('Task', 'TaskManager')
 import sys
 import logging
 
+import gevent
 from gevent.event import Event
 from gevent.greenlet import Greenlet
 
@@ -67,8 +68,10 @@ class _GreenletStdio(Greenlet):
 
 class _TaskIOBridge(object):
     def __init__(self, intask, outtask):
-        self._in2out = intask.output.watch(outtask.input.send)
-        self._out2in = outtask.output.watch(intask.input.send)
+        self._intask = intask
+        self._outtask = outtask
+        self._in2out = gevent.spawn(self._forward_in2out)
+        self._out2in = gevent.spawn(self._forward_out2in)
         self._closed = Event()
 
     def __enter__(self):
@@ -80,19 +83,33 @@ class _TaskIOBridge(object):
     def __del__(self):
         self.close()
 
+    def _forward_in2out(self):
+        try:
+            for msg in self._intask.output.watch():
+                #LOG.info("Forwarding %r->%r - %r", self._intask, self._outtask, msg)
+                self._outtask.input.send(msg)
+        finally:
+            self._closed.set()
+
+    def _forward_out2in(self):
+        try:
+            for msg in self._outtask.output.watch():
+                #LOG.info("Forwarding %r<-%r - %r", self._intask, self._outtask, msg)
+                self._intask.input.send(msg)
+        finally:
+            self._closed.set()
+
     @property
     def closed(self):
         return self._closed.ready()
 
     def wait(self):
-        if not self.closed:
-            return self._closed.wait()
+        self._closed.wait()
 
     def close(self):
         if not self.closed:
-            self._in2out.close()
-            self._out2in.close()
-            self._closed.set()
+            self._in2out.kill()
+            self._out2in.kill()
 
 
 class Task(object):
@@ -100,9 +117,16 @@ class Task(object):
         assert run is not None
         self.input = Channel()
         self.output = Channel()
+        self.started = Event()
         self._obj = run
         self._greenlet = None
         TaskManager.register(self)
+
+    def __repr__(self):
+        return "%s:%x %r" % (self.__class__.__name__, id(self), self._obj)
+
+    def __str__(self):
+        return "%x [%s] %r" % (id(self), self.state, self._obj)
 
     def __nonzero__(self):
         if self._greenlet is None:
@@ -113,14 +137,16 @@ class Task(object):
         return self.__nonzero__()
 
     def wait(self, timeout=None):
-        # XXX: before it's started, there is no _greenlet...
+        if not self._greenlet:
+            self.started.wait(timeout=timeout)
         self._greenlet.join(timeout=timeout)
+        return self
 
     def start(self):
         if self.state == 'NEW':
             self._greenlet = _GreenletStdio(self._run)
             self._greenlet.start()
-            return
+            return self
         raise RuntimeError('Cannot start, invalid state: ' + self.state)
 
     def _run(self):
@@ -133,6 +159,7 @@ class Task(object):
             self._greenlet.switch_in((self.input, self.output, self.output))
 
         LOG.info("RUNNING %r", self)
+        self.started.set()
         try:
             method(self)
             LOG.info("STOPPED %r", self)
@@ -140,6 +167,8 @@ class Task(object):
             LOG.exception("ERROR %r", self)
             raise ex
         finally:
+            self.input.close()
+            self.output.close()
             TaskManager.unregister(self)
 
     def bridge(self, othertask):
@@ -165,19 +194,16 @@ class Task(object):
             return 'ERROR'
         return 'STOPPED'
 
-    def __repr__(self):
-        return "%s:%x %r" % (self.__class__.__name__, id(self), self._obj)
-
-    def __str__(self):
-        return "%x [%s] %r" % (id(self), self.state, self._obj)
-
     def stop(self):
         if self.state == 'RUNNING':
-            self.input.close()
-            self.output.close()
+            # If possible, notify process to stop, or close
             stop_fn = make_callable(self._obj, ['stop', 'close'])
             if stop_fn:
                 stop_fn()
+            # Normally, upon I/O disconnect, the process will die gracefully
+            self.input.close()
+            self.output.close()
+        return self
 
 
 class TaskManager(object):

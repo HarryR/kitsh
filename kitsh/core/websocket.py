@@ -42,29 +42,29 @@ class Websocket(object):
 
     def _recvloop(self, task):
         from geventwebsocket.exceptions import WebSocketError
-        while True:
+        while not self.closed:
             try:
                 data = self._ws.receive()
             except WebSocketError:
                 LOG.exception("%r recvloop", self)
                 break
             if data in (StopIteration, None):
-                break
+                LOG.info("Websocket closed gracefully!")
+                break                
             try:
-                print("Recvd", data)
-                task.input.send(json.loads(data))
-            except Exception:
-                LOG.exception("%r recv error for %r", self, data)
+                msg = json.loads(data)
+            except ValueError:
+                LOG.exception("%r recv decode error for %r", self, data)
                 continue
-        LOG.debug("%r recvloop finished", self)
+            LOG.info("recvloop Got %r - %r", msg, len(task.input._mon))
+            task.output.send(msg)
         self.stop()
 
     def _sendloop(self, task):
-        for msg in task.output.watch():
-            print("Got msg", msg)
+        for msg in task.input.watch():
+            #LOG.info("sendloop Got %r", msg)
             if msg is StopIteration or self.closed:
                 break
-            task.input.send(msg)
             try:
                 self._ws.send(json.dumps(msg))
             except Exception:

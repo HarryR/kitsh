@@ -11,6 +11,17 @@ from .core.process import Process
 from .core.websocket import Websocket
 
 
+LOG = logging.getLogger(__name__)
+
+
+def echoproc(task):
+    LOG.info("echoproc started")
+    for msg in task.input.watch():
+        LOG.info("echoproc got %r", msg)
+        task.output.send(msg)
+    LOG.info("echoproc finished")
+
+
 class WebUI(Blueprint):
     def __repr__(self):
         return "WebUI"
@@ -42,16 +53,23 @@ class WebUI(Blueprint):
         return render_template('view.html', session_id=task.pid)
 
     def websocket(self):
-        sock = request.environ.get('wsgi.websocket')
-        if not sock:
-            self._log.error('Abort: Request is not WebSocket upgradable')
-            raise BadRequest()
+        try:
+            sock = request.environ.get('wsgi.websocket')
+            if not sock:
+                self._log.error('Abort: Request is not WebSocket upgradable')
+                raise BadRequest()
 
-        remote_addr = "%s:%s" % (request.remote_addr,
-                                 request.environ.get('REMOTE_PORT'))
-        task = TaskManager.spawn(Websocket(sock, remote=remote_addr))
-        subtask = TaskManager.spawn(Process(["ps", "-aux"]))
-        task.bridge(subtask).wait()
+            remote_addr = "%s:%s" % (request.remote_addr,
+                                     request.environ.get('REMOTE_PORT'))
+            task = TaskManager.spawn(Websocket(sock, remote=remote_addr))
+            subtask = TaskManager.spawn(Process(["id"]))
+            with task.bridge(subtask) as bridge:
+                bridge.wait()
+            subtask.wait()
+            task.stop()
+            task.wait()
+        except Exception:
+            LOG.exception("in websocket")
         return str()
 
 

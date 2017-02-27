@@ -1,9 +1,6 @@
 #!/usr/bin/env python
 from __future__ import print_function
 
-from gevent import monkey
-monkey.patch_all()
-
 from kitsh.core.task import TaskManager
 from gevent.event import Event
 
@@ -28,13 +25,9 @@ class Receiver(object):
 
 	def run(self, task):
 		assert task.state != 'NEW'
-		print("Yay1")
 		msg = task.input.recv()
-		#print("Got msg", msg)
-		print("Yay2", msg)
 		assert msg == "STEP1"
 		task.output.send("STEP2")
-		print("Yay3")
 		self.sig.set()
 
 
@@ -43,12 +36,8 @@ class Sender(object):
 		self.sig = sig
 
 	def run(self, task):
-		print("Derp1")
 		task.output.send("STEP1")
-		print("Derp2")
 		msg = task.input.recv()
-		print("Derp3", msg)
-		#print("Yay")
 		assert msg == "STEP2"
 		self.sig.set()
 

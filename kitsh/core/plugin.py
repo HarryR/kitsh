@@ -225,7 +225,12 @@ class PluginHost(Plugin):
         if not args:
             args = sys.argv[1:]
         host = cls(plugin, args)
-        return host.start().wait().stop()
+        try:
+            task = host.start()
+            task.wait()
+        except KeyboardInterrupt:
+            task.stop()
+            task.wait()
 
     def start(self):
         """

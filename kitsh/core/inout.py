@@ -14,11 +14,9 @@ LOG = logging.getLogger(__name__)
 class Subscriber(object):
     __slots__ = ('_pub', '_queue', '_closed', '_replyfn')
 
-    def __init__(self, pub, replyfn=None):
+    def __init__(self, pub):
         assert isinstance(pub, Publisher)
-        assert replyfn is None or callable(replyfn)
         self._pub = pub
-        self._replyfn = replyfn
         self._queue = Queue()
         self._closed = Event()
         pub.attach(self)
@@ -54,8 +52,6 @@ class Subscriber(object):
                 self._queue = None
                 self.close()
                 return None
-            if self._replyfn:
-                self._replyfn(msg)
             return msg
 
     def send(self, msg):
@@ -93,8 +89,8 @@ class Publisher(object):
     def __del__(self):
         self.close()
 
-    def subscribe(self, replyfn=None):
-        return Subscriber(self, replyfn)
+    def subscribe(self):
+        return Subscriber(self)
 
     def attach(self, receiverfn):
         self._subs.add(receiverfn)
@@ -139,9 +135,9 @@ class Channel(object):
         if len(self._mon):
             self.recv()
 
-    def watch(self, replyfn=None):
+    def watch(self):
         was_first = len(self._mon) == 0
-        subscriber = self._mon.subscribe(replyfn)
+        subscriber = self._mon.subscribe()
         if was_first:
             self._recvall()
         return subscriber
