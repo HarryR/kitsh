@@ -4,12 +4,10 @@ import os
 import pty
 import logging
 import struct
-import termios
 import fcntl
-from subprocess import PIPE
+import termios
 
 import gevent
-#from gevent.fileobject import FileObject
 from gevent.hub import get_hub
 from gevent.socket import wait, cancel_wait
 from gevent.event import Event
@@ -21,16 +19,18 @@ __all__ = ('Process',)
 LOG = logging.getLogger(__name__)
 
 
-def set_winsize(fd, row, col, xpix=0, ypix=0):
+def set_winsize(fileno, row, col, xpix=0, ypix=0):
     winsize = struct.pack("HHHH", row, col, xpix, ypix)
-    fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
+    fcntl.ioctl(fileno, termios.TIOCSWINSZ, winsize)
 
 
 class Process(object):
+    # TODO: handle bot stdout and stderr
+    # TODO: refactor into TTY, Process and TTYProcess?
     def __init__(self, args, env=None, executable=None, shell=False):
         master, slave = pty.openpty()
         fcntl.fcntl(master, fcntl.F_SETFL, os.O_NONBLOCK)
-        fcntl.fcntl(slave, fcntl.F_SETFL, os.O_NONBLOCK)
+
         self._finished = Event()
         self._master = master
         self._read_event = get_hub().loop.io(master, 1)
@@ -75,7 +75,7 @@ class Process(object):
 
     def run(self, task):
         writer_task = gevent.spawn(self._writer, task.input)
-        waitclosed = gevent.spawn(self._waitclosed)
+        gevent.spawn(self._waitclosed)
         proc = self._proc
         try:
             sock = self._master
@@ -86,7 +86,6 @@ class Process(object):
                     break
                 data = os.read(sock, 1024)
                 if len(data) == 0 or data is StopIteration:
-                    readable.remove(sock)
                     break                
                 if sock == proc.stderr:
                     task.output.send(dict(error=data))
@@ -102,7 +101,10 @@ class Process(object):
         if not self.finished:
             cancel_wait(self._read_event)
             cancel_wait(self._write_event)
-            os.close(self._master)
+            try:
+                os.close(self._master)
+            except Exception:
+                pass
             if not self._proc.poll():
                 self._proc.terminate()
                 self._proc.wait()
