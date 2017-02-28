@@ -62,7 +62,7 @@ class WebUI(Blueprint):
             remote_addr = "%s:%s" % (request.remote_addr,
                                      request.environ.get('REMOTE_PORT'))
             task = TaskManager.spawn(Websocket(sock, remote=remote_addr))
-            subtask = TaskManager.spawn(Process(["id"]))
+            subtask = TaskManager.spawn(Process(["bash"]))
             with task.bridge(subtask) as bridge:
                 bridge.wait()
             subtask.wait()

@@ -49,15 +49,14 @@ class Websocket(object):
                 LOG.exception("%r recvloop", self)
                 break
             if data in (StopIteration, None):
-                LOG.info("Websocket closed gracefully!")
                 break                
             try:
                 msg = json.loads(data)
             except ValueError:
                 LOG.exception("%r recv decode error for %r", self, data)
                 continue
-            LOG.info("recvloop Got %r - %r", msg, len(task.input._mon))
             task.output.send(msg)
+        LOG.debug("%r recvloop finished", self)
         self.stop()
 
     def _sendloop(self, task):
@@ -77,7 +76,6 @@ class Websocket(object):
         if not self.closed:
             self._ws.close()
             self._closed.set()
-            #self.bridge.close()
             LOG.debug("%r stopping", self)
 
     @classmethod

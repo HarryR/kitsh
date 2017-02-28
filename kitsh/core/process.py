@@ -9,8 +9,11 @@ import fcntl
 from subprocess import PIPE
 
 import gevent
+#from gevent.fileobject import FileObject
+from gevent.hub import get_hub
+from gevent.socket import wait, cancel_wait
+from gevent.event import Event
 from gevent.subprocess import Popen
-from gevent.select import select
 
 __all__ = ('Process',)
 
@@ -27,50 +30,80 @@ class Process(object):
     def __init__(self, args, env=None, executable=None, shell=False):
         master, slave = pty.openpty()
         fcntl.fcntl(master, fcntl.F_SETFL, os.O_NONBLOCK)
+        fcntl.fcntl(slave, fcntl.F_SETFL, os.O_NONBLOCK)
+        self._finished = Event()
         self._master = master
+        self._read_event = get_hub().loop.io(master, 1)
+        self._write_event = get_hub().loop.io(master, 2)
         self._args = args
-        self._ret = None
         self._proc = Popen(
             args, env=env, executable=executable, shell=shell,
-            stdin=slave, stdout=PIPE, stderr=PIPE, bufsize=0,
-            universal_newlines=False)
+            stdin=slave, stdout=slave, stderr=slave, bufsize=0,
+            universal_newlines=False, close_fds=True)
 
     def __repr__(self):
         return "Process:%x %r" % (id(self), self._args)
 
+    @property
+    def finished(self):
+        return self._finished.ready()
+
+    def _waitclosed(self):
+        self._proc.wait()
+        self.stop()
+
     def _writer(self, inch):
-        for msg in inch.watch():
-            if 'resize' in msg:
-                set_winsize(self._master, msg['resize']['width'], msg['resize']['height'])
-            if 'data' in msg:
-                writable = [self._master]
-                buf = msg['data']
-                while len(buf):
-                    sock_sets = select([], writable, [])
-                    for sock in sock_sets[1]:
+        """
+        This greenlet will block until messages are ready to be written to pty
+        """
+        try:
+            sock = self._master
+            for msg in inch.watch():
+                if 'resize' in msg:
+                    set_winsize(sock, msg['resize']['width'], msg['resize']['height'])
+                if 'data' in msg:
+                    buf = msg['data']
+                    while not self.finished and len(buf):
+                        try:
+                            wait(self._write_event)
+                        except Exception:
+                            break
                         nwritten = os.write(sock, msg['data'])
                         buf = buf[nwritten:]
+        except Exception:
+            LOG.exception("In Process._writer")
 
     def run(self, task):
         writer_task = gevent.spawn(self._writer, task.input)
+        waitclosed = gevent.spawn(self._waitclosed)
         proc = self._proc
-        readable = [proc.stdout, proc.stderr]
-        while len(readable):
-            sock_sets = select(readable, [], [])
-            for sock in sock_sets[0]:
-                data = sock.read(1024)
-                if not data or data is StopIteration:
+        try:
+            sock = self._master
+            while not self.finished:
+                try:
+                    wait(self._read_event)
+                except Exception:
+                    break
+                data = os.read(sock, 1024)
+                if len(data) == 0 or data is StopIteration:
                     readable.remove(sock)
                     break                
-                if sock == proc.stdout:
-                    task.output.send(dict(data=data))
-                elif sock == proc.stderr:
+                if sock == proc.stderr:
                     task.output.send(dict(error=data))
-        self._ret = self._proc.wait()
-        writer_task.kill()
+                else:
+                    task.output.send(dict(data=data))
+        except Exception:
+            LOG.exception("While reading from process")
+        finally:
+            writer_task.kill()
+            self.stop()
 
     def stop(self):
-        self._master.close()
-        self._slave.close()
-        self._proc.stdout.close()
-        self._proc.stderr.close()
+        if not self.finished:
+            cancel_wait(self._read_event)
+            cancel_wait(self._write_event)
+            os.close(self._master)
+            if not self._proc.poll():
+                self._proc.terminate()
+                self._proc.wait()
+            self._finished.set()
